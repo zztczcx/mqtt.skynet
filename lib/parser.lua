@@ -84,7 +84,7 @@ function parser:_parseLength()
       break
     end
 
-    if string.len(self._buf) <= (bytes + 1) then -- TODO ?+1 check here maybe a bug
+    if string.len(self._buf) < bytes then
       result = false
       break
     end
@@ -125,10 +125,103 @@ function parser:_parsePayload()
   return result
 end
 
+function parser:_parseConnect()
+  local protocolId -- constants id
+  local clientId --Client id
+  local topic  --Will topic
+  local payload -- Will payload
+  local password -- Password
+  local username -- Username
+  local flags = {}
+  local packet = self.packet
+
+  protocolId = self:_parseString()
+  if protocolId == nil then
+    return error('cannot parse protocol id')
+  end
+
+  packet.protocolId = protocolId
+
+  -- Parse constants version number
+  if self._pos > string.len(self._buf) then
+    return error('packet too short')
+  end
+
+  packet.protocolVersion = string.byte(self._buf, self._pos)
+  self._pos = self._pos + 1
+
+  flags.username = bit32.band(string.byte(self._buf, self._pos), constants.USERNAME_MASK)
+  flags.password = bit32.band(string.byte(self._buf, self._pos), constants.PASSWORD_MASK)
+  flags.will     = bit32.band(string.byte(self._buf, self._pos), constants.WILL_FLAG_MASK)
+
+  if flags.will ~= 0 then
+    packet.will = {}
+    packet.will.retain = bit32.band(string.byte(self._buf, self._pos), constants.WILL_RETAIN_MASK) ~= 0
+
+    packet.will.qos    = bit32.rshift(bit32.band(string.byte(self._buf, self._pos), constants.WILL_QOS_MASK), constants.WILL_QOS_SHIFT)
+  end
+
+  packet.clean  = bit32.band(string.byte(self._buf, self._pos), constants.CLEAN_SESSION_MASK) ~= 0
+  self._pos = self._pos + 1
+
+  -- Parse keepalive
+  packet.keepalive = self:_parseNum()
+  if packet.keepalive == -1 then
+    error('packet too short')
+  end
+
+  --Parse client ID
+  clientId = self:_parseString()
+  if clientId == nil then
+    error('pakcet too short')
+  end
+  packet.clientId = clientId
+
+  if flags.will ~= 0 then
+    -- Parse will topic
+    topic = self:_parseString()
+    if topic == nil then
+      error('cannot parse will topic')
+    end
+    packet.will.topic = topic
+
+    -- Parse will payload
+    payload = self:_parseBuffer()
+    if payload == nil then
+      error('cannot parse will payload')
+    end
+    packet.will.payload = payload
+
+    -- Parse username
+    if flags.username then
+      username = self:_parseString()
+      if username == nil then
+        error('cannot parse username')
+      end
+      packet.username = username
+    end
+
+    -- Parse password
+    if flags.password then
+      password = self:_parseBuffer()
+      if password == nil then
+        error('cannot parse username')
+      end
+      packet.password = password
+    end
+
+    return packet
+  end
+
+end
+
 function parser:_parsePublish()
   local packet = self.packet
   packet.topic = self:_parseString()
-  if packet.topic == nil then error("cannot parse topic") end
+
+  if packet.topic == nil then 
+    error("cannot parse topic") 
+  end
 
   if packet.qos > 0 then
     if not self:_parseMessageId() then
@@ -139,11 +232,22 @@ function parser:_parsePublish()
   packet.payload = string.sub(self._buf, self._pos, packet.length)
 end
 
+function parser:_parseMessageId()
+  local packet = self.packet
+  packet.messageId = self:_parseNum()
+
+  if packet.messageId == nil then
+    error('cannot parse message id')
+  end
+
+  return true
+end
+
 function parser:_parseString()
   local length = self:_parseNum()
   local result
 
-  if length == -1 or length + self._pos > string.len(self._buf) then
+  if length == -1 or length + self._pos - 1 > string.len(self._buf) then
     return nil
   end
 
@@ -153,11 +257,25 @@ function parser:_parseString()
   return result
 end
 
+function parser:_parseBuffer()
+  local length = self:_parseNum()
+  local result
+
+  if length == -1 or length + self._pos - 1 > string.len(self._buf) then
+    return nil
+  end
+
+  result = string.sub(self._buf, self._pos, self._pos + length - 1)
+  self._pos = self._pos + length
+
+  return result
+end
+
 function parser:_parseNum()
   if 2 > self._pos + string.len(self._buf) then return -1 end
 
-  local result = string.byte(self._buf) * 256 + string.byte(self._buf, 2) 
-  self._pos = self._pos + 2 --TODO ? + 2
+  local result = string.byte(self._buf, self._pos) * 256 + string.byte(self._buf, self._pos + 1) 
+  self._pos = self._pos + 2 
 
   return result
 end
