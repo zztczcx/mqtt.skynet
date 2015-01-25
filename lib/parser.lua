@@ -3,8 +3,9 @@ local constants = require "constants"
 
 local parser = {}
 local parser_mt = { __index = parser }
-
 local packet = {}
+
+
 function packet.new()
   return {
     cmd = nil,
@@ -16,6 +17,7 @@ function packet.new()
     payload = nil
   }
 end
+
 
 function parser.new()
   local self = {
@@ -33,12 +35,14 @@ function parser.new()
   return setmetatable(self, parser_mt)
 end
 
+
 function parser:_newPacket()
   if self.packet then
     self._buf = string.sub(self._buf, self.packet.length+1)
   end
   return true
 end
+
 
 function parser:parse(buf)
   self._buf = buf
@@ -56,6 +60,7 @@ function parser:parse(buf)
   return self.packet
 end
 
+
 function parser:_parseHeader()
   -- there is at least one byte in the buffer
   local zero = string.byte(self._buf)
@@ -68,6 +73,7 @@ function parser:_parseHeader()
 
   return true
 end
+
 
 function parser:_parseLength()
   local bytes, mul, length, result = 1, 1, 0, true
@@ -98,6 +104,7 @@ function parser:_parseLength()
   return result
 end
 
+
 function parser:_parsePayload() 
   local result = false
 
@@ -124,6 +131,7 @@ function parser:_parsePayload()
 
   return result
 end
+
 
 function parser:_parseConnect()
   local protocolId -- constants id
@@ -215,6 +223,20 @@ function parser:_parseConnect()
 
 end
 
+
+function parser:_parseConnack()
+  local packet = self.packet
+  packet.sessionPresend = not not bit32.band(string.byte(self._buf, self._pos), constants.SESSIONPRESENT_MASK)
+
+  self._pos = self._pos + 1
+
+  packet.returnCode = string.byte(self._buf, self._pos)
+  if packet.returnCode == -1 then
+    error('canno parse return code')
+  end
+end
+
+
 function parser:_parsePublish()
   local packet = self.packet
   packet.topic = self:_parseString()
@@ -232,6 +254,33 @@ function parser:_parsePublish()
   packet.payload = string.sub(self._buf, self._pos, packet.length)
 end
 
+
+function parser:_parseSubscribe()
+  local packet = self.packet
+  local topic, qos
+
+  if packet.qos ~= 1 then
+    error('wrong subscribe header')
+  end
+
+  packet.subscriptions = {}
+
+  if not self:_parseMessageId() then return end
+  while self._pos <= packet.length do
+    -- Parse topic
+    topic = self:_parseString()
+    if topic == nil then 
+      error('Parse error - cannot parse topic')
+    end
+
+    qos = string.byte(self._buf, self._pos)
+    self._pos = self._pos + 1
+
+    table.insert(packet.subscriptions, {topic=topic, qos=qos})
+  end
+end
+
+
 function parser:_parseMessageId()
   local packet = self.packet
   packet.messageId = self:_parseNum()
@@ -242,6 +291,7 @@ function parser:_parseMessageId()
 
   return true
 end
+
 
 function parser:_parseString()
   local length = self:_parseNum()
@@ -257,6 +307,7 @@ function parser:_parseString()
   return result
 end
 
+
 function parser:_parseBuffer()
   local length = self:_parseNum()
   local result
@@ -270,6 +321,7 @@ function parser:_parseBuffer()
 
   return result
 end
+
 
 function parser:_parseNum()
   if 2 > self._pos + string.len(self._buf) then return -1 end
